@@ -1,0 +1,37 @@
+# Systemd unit for Agora ConvoAI Custom LLM Wrapper
+#
+# Install:
+#   sudo cp deploy/custom-llm.service /etc/systemd/system/
+#   sudo systemctl daemon-reload
+#   sudo systemctl enable custom-llm
+#   sudo systemctl start custom-llm
+#
+# Logs:
+#   sudo journalctl -u custom-llm -f
+
+[Unit]
+Description=Agora ConvoAI Custom LLM Wrapper (Dify)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=/opt/custom-llm
+EnvironmentFile=/opt/custom-llm/.env
+ExecStart=/opt/custom-llm/.venv/bin/uvicorn app.main:app \
+    --host 0.0.0.0 \
+    --port 8000 \
+    --workers 1 \
+    --log-level info
+Restart=on-failure
+RestartSec=5s
+User=www-data
+Group=www-data
+
+# Prevent the service from writing to the system journal directly;
+# stdout/stderr are captured by journald automatically.
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target

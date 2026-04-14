@@ -1,0 +1,22 @@
+{
+  "context": {
+    "app_id": "test-app-id",
+    "channel_name": "test-channel",
+    "user_id": "user-001"
+  },
+  "model": "gpt-4o-mini",
+  "messages": [
+    {
+      "role": "system",
+      "content": "You are a helpful voice assistant. Be concise — you are speaking aloud."
+    },
+    {
+      "role": "user",
+      "content": "Can you check the status of my order ORD-12345?",
+      "turn_id": 1,
+      "timestamp": 1712345678000
+    }
+  ],
+  "stream": true,
+  "modalities": ["text"]
+}

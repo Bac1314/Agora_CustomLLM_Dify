@@ -1,0 +1,123 @@
+# Dify Tool Registry
+#
+# Each entry defines one tool exposed to the upstream LLM via OpenAI function calling.
+# When the LLM decides to call the tool, the wrapper fires the Dify workflow
+# asynchronously, returns `synthetic_ack` immediately so the LLM can speak,
+# then delivers the real result via RTM + session memory when Dify finishes.
+#
+# Fields:
+#   name          - OpenAI function name (snake_case, no spaces)
+#   description   - Shown to the LLM to help it decide when to call this tool
+#   parameters    - Valid JSON Schema forwarded verbatim to OpenAI tools[]
+#   dify:
+#     endpoint    - "workflow" (/workflows/run) or "chat" (/chat-messages)
+#     base_url    - Dify server base URL (e.g. https://api.dify.ai/v1)
+#     api_key_env - Name of the environment variable holding the Dify app API key
+#     input_mapping - LLM function arg name -> Dify workflow input name
+#     user_field  - Template for the Dify `user` param; supports {user_id}, {channel_name}
+#   synthetic_ack - Text returned as the tool result immediately (what the LLM speaks while waiting)
+#   rtm_prefix    - Prepended to the Dify result in the out-of-band RTM message
+#   mode          - "async" (default): fire-and-forget, result delivered via RTM + session memory
+#                   "sync": await Dify result before the 2nd LLM call; LLM speaks the real answer
+
+tools:
+  # - name: lookup_order_status
+  #   description: >
+  #     Check the current status of a customer order by order ID.
+  #     Use this when the user asks about their order, shipment, or delivery.
+  #     Results will be delivered to the user shortly after you acknowledge the request.
+  #   parameters:
+  #     type: object
+  #     properties:
+  #       order_id:
+  #         type: string
+  #         description: "The order ID to look up, e.g. ORD-12345"
+  #     required:
+  #       - order_id
+  #   dify:
+  #     endpoint: workflow
+  #     base_url: https://api.dify.ai/v1
+  #     api_key_env: DIFY_ORDER_API_KEY
+  #     input_mapping:
+  #       order_id: order_id
+  #     user_field: "{user_id}"
+  #   synthetic_ack: "I'm checking your order status now — I'll let you know as soon as I have the details."
+  #   rtm_prefix: "[Order Status] "
+
+  - name: web_search
+    description: >
+      Search the web for current information on a topic and return a concise
+      summary. Use this when the user asks about recent news, real-time facts,
+      or anything that may be outside the LLM's training data (e.g., "what's
+      the latest on X?", "look up Y for me", "search for Z"). Results are
+      delivered to the user shortly after you acknowledge the request.
+    parameters:
+      type: object
+      properties:
+        query:
+          type: string
+          description: "The search query — the topic or question to look up on the web. Be specific and concise."
+        location:
+          type: string
+          description: "Optional. The user's location to localise search results, e.g. 'San Francisco, US'. Omit if the query is not location-sensitive."
+      required:
+        - query
+    dify:
+      endpoint: workflow
+      base_url: https://api.dify.ai/v1
+      api_key_env: DIFY_WEB_SEARCH_API_KEY
+      input_mapping:
+        query: query
+        location: location
+      user_field: "{user_id}"
+    synthetic_ack: "Sure — let me search the web for that. I'll share what I find in just a moment."
+    rtm_prefix: "[Web Search] "
+    mode: async
+
+  - name: get_current_weather
+    description: >
+      Get the current weather for a location. Use when the user asks about
+      weather conditions, temperature, or forecast. The answer will be spoken
+      aloud immediately.
+    parameters:
+      type: object
+      properties:
+        location:
+          type: string
+          description: "City and country, e.g. 'San Francisco, US'"
+      required:
+        - location
+    dify:
+      endpoint: workflow
+      base_url: https://api.dify.ai/v1
+      api_key_env: DIFY_WEATHER_API_KEY
+      input_mapping:
+        location: location
+      user_field: "{user_id}"
+    synthetic_ack: ""
+    rtm_prefix: ""
+    mode: sync
+
+  # Add more tools below following the same schema.
+  # Example: a knowledge-base lookup tool
+  # - name: search_knowledge_base
+  #   description: >
+  #     Search the internal knowledge base for product information, FAQs, or policies.
+  #     Use when the user asks a question that may be answered by company documentation.
+  #   parameters:
+  #     type: object
+  #     properties:
+  #       query:
+  #         type: string
+  #         description: "The search query"
+  #     required:
+  #       - query
+  #   dify:
+  #     endpoint: workflow
+  #     base_url: https://api.dify.ai/v1
+  #     api_key_env: DIFY_KB_API_KEY
+  #     input_mapping:
+  #       query: query
+  #     user_field: "{user_id}"
+  #   synthetic_ack: "Let me search our knowledge base for that — just a moment."
+  #   rtm_prefix: "[Knowledge Base] "

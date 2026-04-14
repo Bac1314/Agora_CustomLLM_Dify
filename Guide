@@ -1,0 +1,14 @@
+This project is for building a custom LLM server/wrapper that will be deployed to a cloud server. This is used to intercept the request from Agora ConvoAI, do our own processing, then send it back to Agora. 
+
+Currently Agora ConvoAI follow this process
+
+User speaks (RTC) ---> Agora Server (process ASR audio-to-text) ---> LLM server (receive text input, then output text) ---> Agora Server (process the text, convert text to speech) ---> User hears the AI output
+
+In the new process, I want to intercept the request like so 
+
+User speaks (RTC) ---> Agora Server (process ASR audio-to-text) ---> Custom LLM wrapper (do my own process, adding tools, RAG, etc) --> LLM server (receive text input, then output text) ---> Custom LLM wrapper ---> Agora Server (process the text, convert text to speech) ---> User hears the AI output
+
+For the custom LLM wrapper, i can add additional logic such as RAG, tools, etc. before sending it to the official LLM for processing. In this project, I want to add some async DIFY tasks/workflows. 
+
+References: 
+- Custom LLM (openAI style) - https://github.com/Bac1314/AgoraConvoAICustomLLM (or locally at )
