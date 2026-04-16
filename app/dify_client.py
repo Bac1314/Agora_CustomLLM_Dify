@@ -4,7 +4,7 @@ Async HTTP client for Dify AI.
 Supports two endpoint types (per tool config):
   - "workflow"  → POST /workflows/run
   - "chat"      → POST /chat-messages  (blocking mode; streaming not needed here
-                   since results are delivered out-of-band via RTM)
+                   since results are delivered out-of-band via _publish_message)
 
 All calls are fire-and-forget from the caller's perspective; exceptions are
 caught and returned as error strings so the caller can log/report them without

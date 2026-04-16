@@ -39,7 +39,6 @@ Render auto-detects the `Dockerfile` and `render.yaml` in the repo.
 4. Render detects `render.yaml` and pre-fills the settings. Click **Create Web Service**.
 5. In the Render dashboard, go to **Environment** and fill in the secret values marked `sync: false`:
    - `OPENAI_API_KEY`
-   - `AGORA_APP_ID`, `AGORA_APP_CERTIFICATE`, `AGORA_CUSTOMER_ID`, `AGORA_CUSTOMER_SECRET`
    - `DIFY_WEATHER_API_KEY` (and any other Dify tool keys)
 6. Render builds the Docker image and deploys. Your URL will be `https://<service-name>.onrender.com`.
 7. Point Agora ConvoAI at: `https://<service-name>.onrender.com/chat/completions`
@@ -170,7 +169,7 @@ gcloud run deploy agora-custom-llm \
     --port 8000 \
     --memory 512Mi \
     --set-env-vars "OPENAI_BASE_URL=https://api.openai.com/v1,OPENAI_MODEL=gpt-4o-mini,LOG_LEVEL=INFO,TOOLS_CONFIG=config/tools.yaml" \
-    --set-secrets "OPENAI_API_KEY=openai-api-key:latest,AGORA_APP_ID=agora-app-id:latest"
+    --set-secrets "OPENAI_API_KEY=openai-api-key:latest"
 ```
 
 **Note:** Cloud Run scales to zero when idle (cold starts). For always-on, set `--min-instances 1`.
@@ -187,10 +186,6 @@ fly launch   # detects Dockerfile, prompts for app name and region
 # Set secrets (one per line)
 fly secrets set \
     OPENAI_API_KEY=sk-... \
-    AGORA_APP_ID=... \
-    AGORA_APP_CERTIFICATE=... \
-    AGORA_CUSTOMER_ID=... \
-    AGORA_CUSTOMER_SECRET=... \
     DIFY_WEATHER_API_KEY=app-...
 
 # Set non-secret env vars in fly.toml [env] section, then deploy

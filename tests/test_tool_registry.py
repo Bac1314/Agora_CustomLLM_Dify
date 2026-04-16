@@ -25,7 +25,6 @@ SAMPLE_YAML = textwrap.dedent("""\
             order_id: order_id
           user_field: "{user_id}"
         synthetic_ack: "Checking now."
-        rtm_prefix: "[Order] "
 """)
 
 

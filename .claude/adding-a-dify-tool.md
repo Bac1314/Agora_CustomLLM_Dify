@@ -11,7 +11,7 @@ This project intercepts Agora ConvoAI requests and injects Dify workflows as LLM
 | Mode | Behaviour |
 |------|-----------|
 | `sync` | LLM waits for the Dify result and speaks it immediately |
-| `async` | LLM says the `synthetic_ack` immediately; real result delivered via Agora RTM + injected into session memory on the next turn |
+| `async` | LLM says the `synthetic_ack` immediately; real result stored in task store and injected on the next turn, then delivered via `_publish_message` |
 
 Use **sync** for fast lookups (weather, short queries). Use **async** for slow operations (web search, order lookup, anything that may take several seconds).
 
@@ -105,7 +105,6 @@ Add a new entry under `tools:`. Full schema:
         param_two: another_dify_var  # add one entry per parameter
       user_field: "{user_id}"        # supports {user_id} and {channel_name}
     synthetic_ack: "I'm on it — I'll have an answer for you shortly."   # async only
-    rtm_prefix: "[Tool Name] "      # async only; prepended to RTM message
     mode: sync                      # "sync" or "async" (default: async)
 ```
 
@@ -157,7 +156,7 @@ curl -N -X POST http://localhost:8000/chat/completions \
 
 **Sync mode:** the SSE stream should include the real Dify result in the LLM's spoken response.
 
-**Async mode:** the SSE stream should include the `synthetic_ack` text; the real result arrives separately via Agora RTM and is injected into session memory on the next turn.
+**Async mode:** the SSE stream should include the `synthetic_ack` text; the real result is stored in the task store and injected into the LLM context on the next turn. The LLM then calls `_publish_message` to deliver it to the user's app.
 
 ---
 

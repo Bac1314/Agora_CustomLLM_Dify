@@ -25,7 +25,7 @@ User (RTC) → Agora ConvoAI → [this wrapper] → Upstream LLM
 - Python 3.11+
 - An OpenAI-compatible LLM API (OpenAI, Azure, Groq, Ollama, …)
 - A Dify account/deployment with at least one Workflow or Chatflow app
-- An Agora account with App ID + Customer credentials
+- An Agora account with App ID
 
 ## Setup
 
@@ -38,7 +38,7 @@ pip install -r requirements.txt
 
 # 3. Configure environment
 cp .env.example .env
-# Edit .env — fill in OPENAI_API_KEY, AGORA_*, and DIFY_* keys
+# Edit .env — fill in OPENAI_API_KEY and DIFY_* keys
 
 # 4. Configure tools
 # Edit config/tools.yaml — see inline comments and the example entry
@@ -227,11 +227,9 @@ Restart the server. The new tool is immediately available to the LLM.
 | `OPENAI_BASE_URL` | OpenAI-compatible base URL (default: `https://api.openai.com/v1`) |
 | `OPENAI_API_KEY` | API key for the upstream LLM |
 | `OPENAI_MODEL` | Model name (default: `gpt-4o-mini`) |
-| `AGORA_APP_ID` | Agora App ID (from Agora Console → Project Management) |
-| `AGORA_APP_CERTIFICATE` | Agora App Certificate |
-| `AGORA_RTM_SENDER_UID` | UID used when publishing RTM messages (default: `custom-llm-wrapper`) |
-| `AGORA_CUSTOMER_ID` | Customer ID for Agora REST API (Console → Developer Toolkit) |
-| `AGORA_CUSTOMER_SECRET` | Customer Secret for Agora REST API |
+| `OPENAI_API_VERSION` | API version query param — only needed for Azure OpenAI |
+| `AGORA_APP_ID` | Agora App ID — optional, used for session keying if not sent per-request |
+| `AGORA_APP_CERTIFICATE` | Agora App Certificate — optional |
 | `DIFY_*_API_KEY` | Per-tool Dify API keys — names referenced via `api_key_env` in `tools.yaml` |
 | `APP_HOST` | Bind address (default: `0.0.0.0`) |
 | `APP_PORT` | Port (default: `8000`) |
