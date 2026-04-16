@@ -24,7 +24,6 @@ class ToolDef:
         self.description: str = raw.get("description", "")
         self.parameters: Dict[str, Any] = raw.get("parameters", {"type": "object", "properties": {}})
         self.synthetic_ack: str = raw.get("synthetic_ack", "I'm working on that, I'll get back to you shortly.")
-        self.rtm_prefix: str = raw.get("rtm_prefix", "")
         self.mode: str = raw.get("mode", "async")  # "sync" | "async"
 
         dify = raw.get("dify", {})

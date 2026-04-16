@@ -1,0 +1,17 @@
+.env
+.env.*
+!.env.example
+.venv
+venv
+__pycache__
+*.py[cod]
+*.pyo
+.git
+.gitignore
+tests/
+*.md
+docker-compose*.yml
+render.yaml
+Procfile
+deploy/
+.claude/

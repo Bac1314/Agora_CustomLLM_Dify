@@ -10,5 +10,236 @@ User speaks (RTC) ---> Agora Server (process ASR audio-to-text) ---> Custom LLM 
 
 For the custom LLM wrapper, i can add additional logic such as RAG, tools, etc. before sending it to the official LLM for processing. In this project, I want to add some async DIFY tasks/workflows. 
 
-References: 
-- Custom LLM (openAI style) - https://github.com/Bac1314/AgoraConvoAICustomLLM (or locally at )
+References:
+- Custom LLM (openAI style) - https://github.com/Bac1314/AgoraConvoAICustomLLM (or locally at '/Users/bachuang/Downloads/AllDemos/_PoCs/AgoraConvoAICustomLLM' )
+
+---
+
+# Deployment Guide
+
+The server is a single-process FastAPI/uvicorn app with no database and no persistent storage. All state is in-memory, which is fine for PoC use.
+
+## Quick start with Docker (local)
+
+```bash
+cp .env.example .env   # fill in your keys
+docker compose up --build
+curl http://localhost:8000/health
+```
+
+---
+
+## Option 1: Render (easiest — recommended for PoC)
+
+Render auto-detects the `Dockerfile` and `render.yaml` in the repo.
+
+1. Push the repo to GitHub.
+2. Go to https://dashboard.render.com → **New → Web Service**.
+3. Connect your GitHub repo.
+4. Render detects `render.yaml` and pre-fills the settings. Click **Create Web Service**.
+5. In the Render dashboard, go to **Environment** and fill in the secret values marked `sync: false`:
+   - `OPENAI_API_KEY`
+   - `AGORA_APP_ID`, `AGORA_APP_CERTIFICATE`, `AGORA_CUSTOMER_ID`, `AGORA_CUSTOMER_SECRET`
+   - `DIFY_WEATHER_API_KEY` (and any other Dify tool keys)
+6. Render builds the Docker image and deploys. Your URL will be `https://<service-name>.onrender.com`.
+7. Point Agora ConvoAI at: `https://<service-name>.onrender.com/chat/completions`
+
+**Note:** The free tier sleeps after 15 min of inactivity, causing a cold-start delay. Upgrade to a paid instance type for production.
+
+---
+
+## Option 2: AWS Lightsail / EC2 (VM with systemd)
+
+A `deploy/custom-llm.service` systemd unit is already included.
+
+### Launch the instance
+
+- Lightsail: Ubuntu 22.04, at least **1 GB RAM** (t3.micro or Lightsail $7/mo bundle).
+- EC2: Ubuntu 22.04 AMI, `t3.micro` or larger.
+- Open inbound port **8000** in the security group/firewall (or 80/443 if you add Nginx).
+
+### Install on the server
+
+```bash
+# Install Python 3.11
+sudo apt update && sudo apt install -y python3.11 python3.11-venv python3-pip git
+
+# Clone and set up
+sudo mkdir -p /opt/custom-llm
+sudo git clone <your-repo-url> /opt/custom-llm
+cd /opt/custom-llm
+python3.11 -m venv .venv
+.venv/bin/pip install -r requirements.txt
+
+# Configure environment
+sudo cp .env.example .env
+sudo nano .env          # fill in all keys
+
+# Install and start systemd service
+sudo cp deploy/custom-llm.service /etc/systemd/system/
+sudo systemctl daemon-reload
+sudo systemctl enable custom-llm
+sudo systemctl start custom-llm
+
+# Check logs
+sudo journalctl -u custom-llm -f
+```
+
+### Add HTTPS with Nginx + Let's Encrypt (recommended)
+
+```bash
+sudo apt install -y nginx certbot python3-certbot-nginx
+
+# Create Nginx config
+sudo tee /etc/nginx/sites-available/custom-llm <<'EOF'
+server {
+    listen 80;
+    server_name your-domain.com;
+    location / {
+        proxy_pass http://127.0.0.1:8000;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        # Required for SSE streaming
+        proxy_buffering off;
+        proxy_cache off;
+        proxy_read_timeout 300s;
+    }
+}
+EOF
+
+sudo ln -s /etc/nginx/sites-available/custom-llm /etc/nginx/sites-enabled/
+sudo nginx -t && sudo systemctl reload nginx
+sudo certbot --nginx -d your-domain.com
+```
+
+---
+
+## Option 3: AWS ECS / Fargate (container, no servers to manage)
+
+### Build and push to ECR
+
+```bash
+AWS_REGION=us-east-1
+AWS_ACCOUNT_ID=$(aws sts get-caller-identity --query Account --output text)
+REPO_URI=$AWS_ACCOUNT_ID.dkr.ecr.$AWS_REGION.amazonaws.com/agora-custom-llm
+
+aws ecr create-repository --repository-name agora-custom-llm --region $AWS_REGION
+aws ecr get-login-password --region $AWS_REGION | docker login --username AWS --password-stdin $REPO_URI
+
+docker build -t agora-custom-llm .
+docker tag agora-custom-llm:latest $REPO_URI:latest
+docker push $REPO_URI:latest
+```
+
+### Create task definition
+
+Create a task definition JSON with:
+- Image: the ECR URI above
+- Port mapping: `8000`
+- Environment variables: all keys from `.env.example` (use **Secrets Manager** or **Parameter Store** for sensitive values)
+- CPU/memory: 256 CPU / 512 MB minimum
+
+```bash
+aws ecs register-task-definition --cli-input-json file://deploy/ecs-task-def.json
+```
+
+### Run as a Fargate service
+
+Use the ECS console or CLI to create a service with an **Application Load Balancer** on port 80/443, target group pointing to port 8000, and health check path `/health`.
+
+---
+
+## Option 4: Google Cloud Run (serverless containers)
+
+```bash
+# Build and push to Artifact Registry
+gcloud auth configure-docker us-central1-docker.pkg.dev
+gcloud artifacts repositories create agora-custom-llm \
+    --repository-format=docker --location=us-central1
+
+IMAGE=us-central1-docker.pkg.dev/$PROJECT_ID/agora-custom-llm/app:latest
+docker build -t $IMAGE .
+docker push $IMAGE
+
+# Deploy
+gcloud run deploy agora-custom-llm \
+    --image $IMAGE \
+    --region us-central1 \
+    --platform managed \
+    --allow-unauthenticated \
+    --port 8000 \
+    --memory 512Mi \
+    --set-env-vars "OPENAI_BASE_URL=https://api.openai.com/v1,OPENAI_MODEL=gpt-4o-mini,LOG_LEVEL=INFO,TOOLS_CONFIG=config/tools.yaml" \
+    --set-secrets "OPENAI_API_KEY=openai-api-key:latest,AGORA_APP_ID=agora-app-id:latest"
+```
+
+**Note:** Cloud Run scales to zero when idle (cold starts). For always-on, set `--min-instances 1`.
+
+---
+
+## Option 5: Fly.io
+
+```bash
+# Install flyctl: https://fly.io/docs/hands-on/install-flyctl/
+fly auth login
+fly launch   # detects Dockerfile, prompts for app name and region
+
+# Set secrets (one per line)
+fly secrets set \
+    OPENAI_API_KEY=sk-... \
+    AGORA_APP_ID=... \
+    AGORA_APP_CERTIFICATE=... \
+    AGORA_CUSTOMER_ID=... \
+    AGORA_CUSTOMER_SECRET=... \
+    DIFY_WEATHER_API_KEY=app-...
+
+# Set non-secret env vars in fly.toml [env] section, then deploy
+fly deploy
+```
+
+Fly gives you a `https://<app-name>.fly.dev` URL automatically.
+
+---
+
+## Option 6: Railway
+
+1. Push the repo to GitHub.
+2. Go to https://railway.app → **New Project → Deploy from GitHub repo**.
+3. Railway auto-detects the `Dockerfile`.
+4. In **Variables**, add all keys from `.env.example`.
+5. Railway assigns a public HTTPS URL automatically.
+
+---
+
+## Option 7: DigitalOcean App Platform
+
+1. Go to https://cloud.digitalocean.com/apps → **Create App**.
+2. Connect your GitHub repo.
+3. DigitalOcean detects the `Dockerfile` and sets up the build.
+4. Under **Environment Variables**, add all your secrets.
+5. Set the HTTP port to `8000` and health check path to `/health`.
+
+---
+
+## Agora ConvoAI wiring (all providers)
+
+Once deployed, set the custom LLM URL in your ConvoAI join config:
+
+```json
+{
+  "llm": {
+    "vendor": "custom",
+    "url": "https://<your-deployed-host>/chat/completions",
+    "api_key": "any-non-empty-string"
+  }
+}
+```
+
+## SSE streaming note
+
+All reverse proxies (Nginx, ALB, Cloud Run, etc.) must be configured to **disable response buffering** for the SSE stream to reach the client in real time:
+
+- **Nginx:** `proxy_buffering off;` (already in the example above)
+- **ALB:** uses HTTP/1.1 keep-alive — no extra config needed, but set idle timeout ≥ 60s
+- **Cloud Run:** streaming is enabled by default
+- **Fly.io / Railway / Render:** streaming is enabled by default

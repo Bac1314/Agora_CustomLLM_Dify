@@ -70,7 +70,13 @@ AnyMessage = Union[SystemMessage, UserMessage, AssistantMessage, ToolMessage]
 
 
 class ChatCompletionRequest(BaseModel):
-    # Agora ConvoAI passes app/channel/user context here
+    # Agora ConvoAI flattens its `params` block into the request root, so these
+    # arrive as top-level fields.  They are also echoed inside `metadata` if the
+    # caller puts them there, and `context` is kept for backward compatibility.
+    app_id: Optional[str] = None
+    channel_name: Optional[str] = None
+    user_id: Optional[str] = None
+    metadata: Optional[Dict[str, Any]] = None
     context: Optional[Dict[str, Any]] = None
     model: Optional[str] = None
     messages: List[AnyMessage]

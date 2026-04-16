@@ -12,10 +12,9 @@ class Settings(BaseSettings):
     openai_model: str = "gpt-4o-mini"
     openai_api_version: str = ""  # Azure OpenAI only; passed as ?api-version= query param
 
-    # Agora (for RTM delivery)
+    # Agora (app context for session keying)
     agora_app_id: str = ""
     agora_app_certificate: str = ""
-    agora_rtm_sender_uid: str = "custom-llm-wrapper"
 
     # App
     app_host: str = "0.0.0.0"

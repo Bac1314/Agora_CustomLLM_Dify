@@ -1,4 +1,5 @@
 import asyncio
+import json
 import logging
 import traceback
 from contextlib import asynccontextmanager
@@ -7,6 +8,7 @@ from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import StreamingResponse
 
 from app import session_store as ss
+from app import task_store as ts
 from app.llm_client import get_client
 from app.schemas import ChatCompletionRequest
 from app.settings import get_settings
@@ -22,11 +24,13 @@ async def lifespan(app: FastAPI):
     settings = get_settings()
     # Load Dify tool registry from YAML
     registry.load(settings.tools_config)
-    # Start session-store cleanup background task
+    # Start background cleanup tasks
     ss.store.start_cleanup()
+    ts.store.start_cleanup()
     logger.info("Agora ConvoAI Custom LLM Wrapper started (port %d)", settings.app_port)
     yield
     ss.store.stop_cleanup()
+    ts.store.stop_cleanup()
     logger.info("Wrapper shutting down.")
 
 
@@ -34,7 +38,7 @@ app = FastAPI(
     title="Agora ConvoAI Custom LLM Wrapper",
     description=(
         "OpenAI-compatible /chat/completions proxy with async Dify tool dispatch "
-        "and Agora RTM result delivery."
+        "and _publish_message result delivery."
     ),
     version="1.0.0",
     lifespan=lifespan,
@@ -48,6 +52,16 @@ async def health():
 
 @app.post("/chat/completions")
 async def create_chat_completion(request: ChatCompletionRequest, http_request: Request):
+    # DIAGNOSTIC: log the messages Agora sends
+    raw_body = await http_request.body()
+    raw_json = json.loads(raw_body)
+    logger.info("=== MESSAGES FROM AGORA (turn_id=%s, %d messages) ===",
+                raw_json.get("turn_id", "?"), len(request.messages))
+    for i, msg in enumerate(request.messages):
+        content = msg.content if isinstance(msg.content, str) else str(msg.content)
+        preview = (content[:300] + "...") if len(content) > 300 else content
+        logger.info("  msg[%d] role=%-10s content=%s", i, msg.role, preview)
+
     if not request.stream:
         raise HTTPException(status_code=400, detail="Only streaming (stream=true) is supported.")
 

@@ -1,9 +1,13 @@
 # Dify Tool Registry
 #
 # Each entry defines one tool exposed to the upstream LLM via OpenAI function calling.
-# When the LLM decides to call the tool, the wrapper fires the Dify workflow
-# asynchronously, returns `synthetic_ack` immediately so the LLM can speak,
-# then delivers the real result via RTM + session memory when Dify finishes.
+# When the LLM decides to call the tool, the wrapper fires the Dify workflow and
+# returns `synthetic_ack` immediately so the LLM can speak while the task runs.
+#
+# Async delivery:
+#   The Dify result is stored in the task store. On the next conversation turn the
+#   LLM sees the completed result in its context and calls Agora's built-in
+#   _publish_message tool to deliver it to the user's app.
 #
 # Fields:
 #   name          - OpenAI function name (snake_case, no spaces)
@@ -16,8 +20,7 @@
 #     input_mapping - LLM function arg name -> Dify workflow input name
 #     user_field  - Template for the Dify `user` param; supports {user_id}, {channel_name}
 #   synthetic_ack - Text returned as the tool result immediately (what the LLM speaks while waiting)
-#   rtm_prefix    - Prepended to the Dify result in the out-of-band RTM message
-#   mode          - "async" (default): fire-and-forget, result delivered via RTM + session memory
+#   mode          - "async" (default): fire-and-forget, result delivered via _publish_message next turn
 #                   "sync": await Dify result before the 2nd LLM call; LLM speaks the real answer
 
 tools:
@@ -42,7 +45,6 @@ tools:
   #       order_id: order_id
   #     user_field: "{user_id}"
   #   synthetic_ack: "I'm checking your order status now — I'll let you know as soon as I have the details."
-  #   rtm_prefix: "[Order Status] "
 
   - name: web_search
     description: >
@@ -71,7 +73,6 @@ tools:
         location: location
       user_field: "{user_id}"
     synthetic_ack: "Sure — let me search the web for that. I'll share what I find in just a moment."
-    rtm_prefix: "[Web Search] "
     mode: async
 
   - name: get_current_weather
@@ -95,7 +96,6 @@ tools:
         location: location
       user_field: "{user_id}"
     synthetic_ack: ""
-    rtm_prefix: ""
     mode: sync
 
   # Add more tools below following the same schema.
@@ -120,4 +120,3 @@ tools:
   #       query: query
   #     user_field: "{user_id}"
   #   synthetic_ack: "Let me search our knowledge base for that — just a moment."
-  #   rtm_prefix: "[Knowledge Base] "

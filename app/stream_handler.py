@@ -2,17 +2,32 @@
 SSE streaming pass-through with Dify tool-call interception.
 
 Flow for each /chat/completions request:
-  1. Upstream LLM is called with Dify tools injected.
-  2. All non-tool-call chunks are forwarded to the client as-is.
-  3. When the LLM finishes with finish_reason == "tool_calls":
-       a. Each Dify-registered tool call gets a synthetic tool-result chunk
-          (the synthetic_ack text) emitted immediately.
-       b. A background asyncio task is spawned to run the Dify workflow and
-          deliver results via RTM + session memory.
-       c. The LLM is called a SECOND TIME with the augmented messages so it
-          produces a natural spoken acknowledgement ("One sec, checking…").
-       d. Those second-pass chunks are forwarded to the client.
-  4. Stream ends with "data: [DONE]\n\n".
+  1. Inject completed/running background task states as a system message.
+  2. Upstream LLM is called with Dify tools injected.
+  3. All non-tool-call chunks are forwarded to the client as-is.
+  4. When the LLM finishes with finish_reason == "tool_calls":
+
+     Case A — only non-Dify tools (e.g. _publish_message):
+       - Forward the finish chunk as-is to Agora ConvoAI.
+       - Stream ends; Agora executes the tool and sends a follow-up request.
+
+     Case B — only Dify tools:
+       - Suppress finish chunk; emit synthetic ack tool-result chunk.
+       - Sync tools: await Dify result inline; 2nd LLM call speaks the answer.
+       - Async tools: fire background task, emit synthetic ack; 2nd LLM call
+         speaks an acknowledgement ("One sec, checking…").
+
+     Case C — mixed Dify + non-Dify tools:
+       - Handle Dify tools per Case B (suppress finish chunk, 2nd LLM call).
+       - Non-Dify tools are skipped this turn; the LLM will call them on the
+         next turn after seeing the injected task results.
+
+  5. Stream ends with "data: [DONE]\n\n".
+
+Background task delivery (async mode):
+  - Completed task results are stored in task_store keyed by session.
+  - On the next turn, get_pending_injection() surfaces completed/running tasks
+    as a system message; the LLM calls _publish_message to deliver results.
 """
 
 import asyncio
@@ -24,7 +39,7 @@ from typing import Any, AsyncIterator, Dict, List, Optional
 
 from openai import AsyncOpenAI
 
-from app import dify_client, rtm_publisher, session_store
+from app import dify_client, session_store, task_store
 from app.schemas import ChatCompletionRequest
 from app.settings import get_settings
 from app.tool_registry import ToolDef, registry
@@ -37,31 +52,50 @@ logger = logging.getLogger(__name__)
 # ---------------------------------------------------------------------------
 
 class RequestContext:
-    """Metadata extracted from the ChatCompletionRequest context field."""
+    """Agora ConvoAI flattens its `params` block into the request root, so
+    app_id / channel_name / user_id arrive as top-level fields.  The metadata
+    dict and legacy context dict are checked as fallbacks."""
 
     def __init__(self, req: ChatCompletionRequest) -> None:
+        logger.info("=== top-level: app_id=%r channel_name=%r user_id=%r", req.app_id, req.channel_name, req.user_id)
+        logger.info("=== metadata field: %s", req.metadata)
+        logger.info("=== context field: %s", req.context)
+        for msg in req.messages:
+            if hasattr(msg, "metadata") and msg.metadata:
+                logger.info("=== user message metadata: role=%s %s", msg.role, msg.metadata)
+
+        meta: Dict[str, Any] = req.metadata or {}
         ctx: Dict[str, Any] = req.context or {}
-        self.app_id: str = ctx.get("app_id", "") or ctx.get("appId", "")
-        self.channel_name: str = ctx.get("channel_name", "") or ctx.get("channelName", "")
-        self.user_id: str = ctx.get("user_id", "") or ctx.get("userId", "")
+
+        self.app_id: str = (
+            req.app_id
+            or meta.get("app_id", "") or meta.get("appId", "")
+            or ctx.get("app_id", "") or ctx.get("appId", "")
+        )
+        self.channel_name: str = (
+            req.channel_name
+            or meta.get("channel_name", "") or meta.get("channelName", "")
+            or ctx.get("channel_name", "") or ctx.get("channelName", "")
+        )
+        self.user_id: str = (
+            req.user_id
+            or meta.get("user_id", "") or meta.get("userId", "")
+            or ctx.get("user_id", "") or ctx.get("userId", "")
+        )
 
         if not self.app_id:
             logger.warning(
-                "No app_id in request context — RTM delivery and session memory disabled. "
-                "Agora ConvoAI should populate context.app_id; check your agent join config."
+                "No app_id found in request — task store and session memory disabled. "
+                "Agora ConvoAI should populate params.app_id in the agent join config."
             )
 
     @property
     def session_key(self) -> str:
         return f"{self.app_id}:{self.channel_name}:{self.user_id}"
 
-    @property
-    def rtm_enabled(self) -> bool:
-        return bool(self.app_id and self.channel_name)
-
 
 # ---------------------------------------------------------------------------
-# Background task: run Dify + deliver results
+# Background task: run Dify and store result in task store
 # ---------------------------------------------------------------------------
 
 async def _call_dify(
@@ -91,44 +125,35 @@ async def _call_dify(
         )
 
 
-async def _run_dify_and_deliver(
+async def _run_dify_background(
     tool_def: ToolDef,
     llm_args: Dict[str, Any],
     ctx: RequestContext,
+    task_id: str,
 ) -> None:
     """
     Background task (fire-and-forget) for async-mode tools.
 
-    1. Calls the Dify workflow/chat endpoint.
-    2. Publishes the result to RTM so the client receives it immediately.
-    3. Appends a system note to session memory so the LLM knows on the next turn.
+    Calls the Dify workflow/chat endpoint and stores the result in the task
+    store. On the next conversation turn, get_pending_injection() surfaces the
+    result as a system message; the LLM then calls _publish_message to deliver
+    it to the user's app.
     """
-    logger.info("Background: starting Dify task '%s' with args=%s", tool_def.name, llm_args)
+    logger.info("Background: starting Dify task '%s' (id=%s) with args=%s", tool_def.name, task_id, llm_args)
     try:
         result = await _call_dify(tool_def, llm_args, ctx)
-
-        rtm_message = f"{tool_def.rtm_prefix}{result}"
-
-        # Deliver in parallel: RTM (client-facing) + session memory (LLM-facing)
-        tasks = [session_store.store.append_tool_result(ctx.session_key, tool_def.name, result)]
-        if ctx.rtm_enabled:
-            tasks.append(rtm_publisher.publish(ctx.app_id, ctx.channel_name, rtm_message))
-        await asyncio.gather(*tasks, return_exceptions=True)
-
-        logger.info("Background: Dify task '%s' complete, results delivered.", tool_def.name)
-
+        await task_store.store.complete_task(ctx.session_key, task_id, result)
+        logger.info("Background: Dify task '%s' (id=%s) complete.", tool_def.name, task_id)
     except Exception as exc:
-        logger.error("Background: Dify task '%s' failed: %s", tool_def.name, exc, exc_info=True)
+        logger.error("Background: Dify task '%s' (id=%s) failed: %s", tool_def.name, task_id, exc, exc_info=True)
         try:
-            await session_store.store.append_task_failure(
-                ctx.session_key, tool_def.name, str(exc)
-            )
+            await task_store.store.fail_task(ctx.session_key, task_id, str(exc))
         except Exception:
             pass
 
 
 # ---------------------------------------------------------------------------
-# SSE generator
+# SSE helpers
 # ---------------------------------------------------------------------------
 
 def _make_tool_result_chunk(tool_call_id: str, tool_name: str, content: str) -> str:
@@ -154,12 +179,55 @@ def _make_tool_result_chunk(tool_call_id: str, tool_name: str, content: str) -> 
 
 def _messages_as_dicts(request: ChatCompletionRequest) -> List[Dict[str, Any]]:
     """Convert Pydantic message models to plain dicts for the OpenAI client."""
-    result = []
-    for msg in request.messages:
-        d = msg.model_dump(exclude_none=True)
-        result.append(d)
-    return result
+    return [msg.model_dump(exclude_none=True) for msg in request.messages]
 
+
+def _build_task_injection_note(
+    completed: list,
+    running: list,
+) -> Optional[str]:
+    """
+    Build a system message text describing background task states.
+    Returns None if there is nothing to inject.
+    """
+    parts: List[str] = []
+
+    if completed:
+        result_lines = []
+        for t in completed:
+            if t.error:
+                result_lines.append(f"- {t.tool_name}: FAILED — {t.error}")
+            else:
+                result_lines.append(f"- {t.tool_name}: {t.result}")
+        parts.append(
+            "The following background tasks have just completed:\n"
+            + "\n".join(result_lines)
+            + "\n\nYou MUST call the _publish_message tool to deliver each completed result "
+            "to the user's app. Format the result clearly for the user. Then briefly "
+            "confirm to the user that the results have been sent."
+        )
+
+    if running:
+        in_progress_lines = [
+            f"- {t.tool_name} (started {int(time.monotonic() - t.created_at)}s ago, still running)"
+            for t in running
+        ]
+        parts.append(
+            "The following background tasks are still in progress. "
+            "If the user asks about them, let them know they are still being worked on:\n"
+            + "\n".join(in_progress_lines)
+        )
+
+    return "\n\n".join(parts) if parts else None
+
+
+# We need monotonic for the injection note
+import time
+
+
+# ---------------------------------------------------------------------------
+# Main SSE generator
+# ---------------------------------------------------------------------------
 
 async def stream_with_dify_tools(
     request: ChatCompletionRequest,
@@ -168,23 +236,38 @@ async def stream_with_dify_tools(
     """
     Async generator yielding SSE strings for the HTTP response.
 
-    Wraps the upstream LLM stream, intercepts Dify tool calls, and handles
-    the two-pass pattern (ack turn + assistant spoken turn).
+    Wraps the upstream LLM stream, intercepts Dify tool calls, handles
+    the two-pass pattern (ack turn + assistant spoken turn), and injects
+    background task state from the task store on each turn.
     """
     settings = get_settings()
     ctx = RequestContext(request)
 
-    # --- Session merge: inject any pending background-task results ---
+    # --- Session merge: inject any pending general notes ---
     base_messages = _messages_as_dicts(request)
     if ctx.app_id:
         merged_messages = await session_store.store.merge_into(base_messages, ctx.session_key)
     else:
         merged_messages = base_messages
 
+    # --- Task store injection: completed/running background task states ---
+    if ctx.app_id:
+        completed_tasks, running_tasks = await task_store.store.get_pending_injection(ctx.session_key)
+        injection_note = _build_task_injection_note(completed_tasks, running_tasks)
+        if injection_note:
+            merged_messages = list(merged_messages) + [{"role": "system", "content": injection_note}]
+            logger.info(
+                "Injected task states: %d completed, %d running",
+                len(completed_tasks), len(running_tasks),
+            )
+
     # --- Build merged tool list ---
     dify_tools = registry.build_openai_tools()
     caller_tools: List[Dict[str, Any]] = [t.model_dump() for t in (request.tools or [])]
-    all_tools = caller_tools + [t for t in dify_tools if t["function"]["name"] not in {ct["function"]["name"] for ct in caller_tools}]
+    all_tools = caller_tools + [
+        t for t in dify_tools
+        if t["function"]["name"] not in {ct["function"]["name"] for ct in caller_tools}
+    ]
 
     model = request.model or settings.openai_model
 
@@ -207,8 +290,8 @@ async def stream_with_dify_tools(
 
     # Accumulate tool calls across streamed chunks
     accumulated_tool_calls: Dict[int, Dict[str, Any]] = {}
-    first_pass_chunks: List[Dict[str, Any]] = []
     finish_reason: Optional[str] = None
+    finish_chunk_dict: Optional[Dict[str, Any]] = None
     assistant_content_parts: List[str] = []
 
     async for chunk in first_response:
@@ -221,7 +304,7 @@ async def stream_with_dify_tools(
         if reason:
             finish_reason = reason
 
-        # Accumulate content for session persistence
+        # Accumulate content
         if delta.get("content"):
             assistant_content_parts.append(delta["content"])
 
@@ -235,47 +318,55 @@ async def stream_with_dify_tools(
                     "type": "function",
                     "function": {"name": fn.get("name", ""), "arguments": ""},
                 }
-            # Merge id if we get it later
             if tc.get("id"):
                 accumulated_tool_calls[idx]["id"] = tc["id"]
             if fn.get("name"):
                 accumulated_tool_calls[idx]["function"]["name"] = fn["name"]
             accumulated_tool_calls[idx]["function"]["arguments"] += fn.get("arguments", "") or ""
 
-        first_pass_chunks.append(chunk_dict)
-        # Forward all chunks except the finish chunk (we handle that below)
-        if reason != "tool_calls":
+        if reason == "tool_calls":
+            # Capture finish chunk; don't yield yet — decide below
+            finish_chunk_dict = chunk_dict
+        else:
             yield f"data: {json.dumps(chunk_dict)}\n\n"
 
     # === HANDLE TOOL CALLS ===
     if finish_reason == "tool_calls" and accumulated_tool_calls:
         dify_calls = []
-        non_dify_calls = []
+        passthrough_calls = []
         for tc in accumulated_tool_calls.values():
             name = tc["function"]["name"]
             if registry.is_dify_tool(name):
                 dify_calls.append(tc)
             else:
-                non_dify_calls.append(tc)
+                passthrough_calls.append(tc)
 
-        # Forward the finish chunk for non-Dify tool calls (if any)
-        # and add the assistant message to context
+        # Case A: only non-Dify tool calls (e.g. _publish_message)
+        # Forward the finish chunk to Agora and let it handle execution.
+        if passthrough_calls and not dify_calls:
+            logger.info(
+                "Case A: passthrough-only tool calls %s — forwarding finish chunk to Agora",
+                [tc["function"]["name"] for tc in passthrough_calls],
+            )
+            if finish_chunk_dict:
+                yield f"data: {json.dumps(finish_chunk_dict)}\n\n"
+            yield "data: [DONE]\n\n"
+            return
+
+        # Case B or C: Dify tools present — handle internally
         assistant_msg_dict: Dict[str, Any] = {
             "role": "assistant",
             "content": "".join(assistant_content_parts) or None,
             "tool_calls": list(accumulated_tool_calls.values()),
         }
-
         second_pass_messages = list(merged_messages) + [assistant_msg_dict]
 
-        # For each Dify tool call: branch on sync vs async mode
         for tc in dify_calls:
             tool_name = tc["function"]["name"]
             tool_call_id = tc["id"] or f"call_{uuid.uuid4().hex[:8]}"
             tool_def = registry.get_tool(tool_name)
             assert tool_def is not None
 
-            # Parse LLM-provided arguments
             try:
                 llm_args = json.loads(tc["function"]["arguments"]) if tc["function"]["arguments"] else {}
             except json.JSONDecodeError:
@@ -283,7 +374,6 @@ async def stream_with_dify_tools(
                 logger.warning("Could not parse tool args for '%s': %s", tool_name, tc["function"]["arguments"])
 
             if tool_def.mode == "sync":
-                # Await Dify result inline; 2nd LLM call will speak the real answer
                 logger.info("Sync Dify call for tool '%s'", tool_name)
                 result = await _call_dify(tool_def, llm_args, ctx)
                 yield _make_tool_result_chunk(tool_call_id, tool_name, result)
@@ -294,7 +384,7 @@ async def stream_with_dify_tools(
                     "content": result,
                 })
             else:
-                # Async: emit synthetic ack immediately, deliver real result out-of-band
+                # Async: emit synthetic ack, fire background task
                 yield _make_tool_result_chunk(tool_call_id, tool_name, tool_def.synthetic_ack)
                 second_pass_messages.append({
                     "role": "tool",
@@ -302,11 +392,18 @@ async def stream_with_dify_tools(
                     "name": tool_name,
                     "content": tool_def.synthetic_ack,
                 })
-                asyncio.create_task(
-                    _run_dify_and_deliver(tool_def, llm_args, ctx),
-                    name=f"dify-{tool_name}-{uuid.uuid4().hex[:6]}",
-                )
-                logger.info("Spawned background Dify task for tool '%s'", tool_name)
+                if ctx.app_id:
+                    task_id = await task_store.store.create_task(ctx.session_key, tool_name, llm_args)
+                    asyncio.create_task(
+                        _run_dify_background(tool_def, llm_args, ctx, task_id),
+                        name=f"dify-{tool_name}-{task_id[:8]}",
+                    )
+                    logger.info("Spawned background Dify task '%s' (id=%s)", tool_name, task_id)
+                else:
+                    logger.warning(
+                        "Async tool '%s' called but no session context — result will not be delivered",
+                        tool_name,
+                    )
 
         # === SECOND UPSTREAM CALL (spoken ack turn) ===
         try:
@@ -314,7 +411,7 @@ async def stream_with_dify_tools(
                 model=model,
                 messages=second_pass_messages,
                 tools=all_tools if all_tools else None,
-                tool_choice="none",  # Don't call tools again in the ack turn
+                tool_choice="none",
                 modalities=request.modalities,
                 audio=request.audio,
                 response_format=request.response_format.model_dump() if request.response_format else None,
@@ -325,6 +422,5 @@ async def stream_with_dify_tools(
                 yield f"data: {json.dumps(chunk.model_dump())}\n\n"
         except Exception as e:
             logger.error("Second-pass upstream LLM error: %s", e, exc_info=True)
-            # Don't re-raise; we already sent the synthetic ack
 
     yield "data: [DONE]\n\n"
