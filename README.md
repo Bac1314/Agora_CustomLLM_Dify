@@ -4,6 +4,16 @@
   <img src="assets/diagram.png" alt="Project Flow Diagram" width="100%" style="border-radius: 12px;" />
 </p>
 
+<p align="center">
+  <a href="https://render.com/deploy?repo=https://github.com/Bac1314/Agora_CustomLLM_Dify"><img src="https://render.com/images/deploy-to-render-button.svg" alt="Deploy to Render" height="32" /></a>
+  &nbsp;
+  <a href="https://railway.com/new/template?template=https://github.com/Bac1314/Agora_CustomLLM_Dify"><img src="https://railway.com/button.svg" alt="Deploy on Railway" height="32" /></a>
+  &nbsp;
+  <a href="https://cloud.digitalocean.com/apps/new?repo=https://github.com/Bac1314/Agora_CustomLLM_Dify/tree/main"><img src="https://www.deploytodo.com/do-btn-blue.svg" alt="Deploy to DigitalOcean" height="32" /></a>
+  &nbsp;
+  <a href="https://heroku.com/deploy?template=https://github.com/Bac1314/Agora_CustomLLM_Dify"><img src="https://www.herokucdn.com/deploy/button.svg" alt="Deploy to Heroku" height="32" /></a>
+</p>
+
 An OpenAI-compatible `/chat/completions` SSE proxy that sits between Agora ConvoAI and your upstream LLM. It registers Dify workflows as LLM-callable tools and supports two execution modes per tool:
 
 - **`async`** (default) — fires the Dify workflow in the background, speaks a synthetic acknowledgement immediately. When Dify finishes, the result is stored in the task store and injected into the next conversation turn so the LLM delivers it via Agora's built-in `_publish_message` tool.
@@ -26,10 +36,12 @@ User (RTC) → Agora ConvoAI → [this wrapper] → Upstream LLM
 
 ## Requirements
 
-- Python 3.11+
+- Python 3.9–3.13 (3.11+ recommended; see note below)
 - An OpenAI-compatible LLM API (OpenAI, Azure, Groq, Ollama, …)
 - A Dify account/deployment with at least one Workflow or Chatflow app
 - An Agora account with App ID
+
+> **Python 3.14 notice:** The codebase uses legacy `typing` generics (`Dict`, `List`, `Optional`, `Union`, etc.) that are scheduled for removal in Python 3.14. No action is needed today, but a migration to built-in generics (`dict`, `list`, `str | None`) will be required before upgrading to Python 3.14.
 
 ## Setup
 
@@ -75,6 +87,26 @@ docker compose up --build
 curl http://localhost:8000/health
 ```
 
+### Using the pre-built image
+
+Skip the build step entirely — pull the published image from GHCR:
+
+```bash
+docker run --rm -p 8000:8000 \
+  --env-file .env \
+  ghcr.io/bac1314/agora-custom-llm-dify:latest
+```
+
+To use a specific release:
+
+```bash
+docker run --rm -p 8000:8000 \
+  --env-file .env \
+  ghcr.io/bac1314/agora-custom-llm-dify:v1.0.0
+```
+
+Available tags: `latest` (tracks `main`), `sha-<short>` (per commit), `v<version>` (per tag). Images are published for both `linux/amd64` and `linux/arm64`.
+
 ## Running tests
 
 ```bash
@@ -84,17 +116,28 @@ pytest tests/ -v
 
 ## Deployment
 
+### One-click deploy
+
+Click a button above (or below) — the provider reads the config from this repo and prompts you for secrets in its dashboard:
+
+| Provider | Button / command | Config file |
+|---|---|---|
+| **Render** | [![Deploy to Render](https://render.com/images/deploy-to-render-button.svg)](https://render.com/deploy?repo=https://github.com/Bac1314/Agora_CustomLLM_Dify) | `render.yaml` |
+| **Railway** | [![Deploy on Railway](https://railway.com/button.svg)](https://railway.com/new/template?template=https://github.com/Bac1314/Agora_CustomLLM_Dify) | `railway.toml` |
+| **DigitalOcean** | [![Deploy to DO](https://www.deploytodo.com/do-btn-blue.svg)](https://cloud.digitalocean.com/apps/new?repo=https://github.com/Bac1314/Agora_CustomLLM_Dify/tree/main) | `.do/app.yaml` |
+| **Heroku-style** | [![Deploy to Heroku](https://www.herokucdn.com/deploy/button.svg)](https://heroku.com/deploy?template=https://github.com/Bac1314/Agora_CustomLLM_Dify) | `app.json` + `Procfile` |
+| **Fly.io** | `fly launch --copy-config` | `fly.toml` |
+
+### Manual / self-hosted
+
 See the **[Guide](Guide)** file for step-by-step instructions for every major provider.
 
 | Provider | Type | Config file |
 |---|---|---|
-| **Render** | PaaS | `render.yaml` (auto-detected) |
 | **AWS EC2 / Lightsail** | VM | `deploy/custom-llm.service` (systemd) |
 | **AWS ECS / Fargate** | Container | `Dockerfile` + ECR |
 | **Google Cloud Run** | Serverless | `Dockerfile` + `gcloud run deploy` |
-| **Fly.io** | Container PaaS | `Dockerfile` + `fly launch` |
-| **Railway / DigitalOcean** | PaaS | `Dockerfile` (auto-detected) |
-| **Heroku-compatible** | PaaS | `Procfile` |
+| **Coolify / Dokku** | Self-hosted PaaS | `Dockerfile` or `Procfile` |
 
 All providers share the same `Dockerfile`. Set env vars from `.env.example` in your provider's secrets/environment panel.
 

@@ -1,0 +1,44 @@
+{
+  "name": "Agora ConvoAI Custom LLM Wrapper",
+  "description": "OpenAI-compatible SSE proxy between Agora ConvoAI and your LLM, with Dify workflow tools.",
+  "keywords": ["agora", "dify", "llm", "fastapi", "convoai"],
+  "repository": "https://github.com/Bac1314/Agora_CustomLLM_Dify",
+  "env": {
+    "OPENAI_BASE_URL": {
+      "description": "OpenAI-compatible base URL. Change to your provider's URL for Azure, Groq, Ollama, etc.",
+      "value": "https://api.openai.com/v1"
+    },
+    "OPENAI_API_KEY": {
+      "description": "API key for the upstream LLM (e.g. sk-...).",
+      "required": true
+    },
+    "OPENAI_MODEL": {
+      "description": "Model name, e.g. gpt-4o-mini, gpt-4o.",
+      "value": "gpt-4o-mini"
+    },
+    "WRAPPER_API_KEY": {
+      "description": "Bearer token protecting /chat/completions. Set this as llm.api_key in Agora ConvoAI. Auto-generated if left blank during deploy.",
+      "generator": "secret"
+    },
+    "DIFY_WEATHER_API_KEY": {
+      "description": "Dify API key for the get_current_weather tool (app-…). Add more DIFY_*_API_KEY vars to match your tools.yaml.",
+      "required": false
+    },
+    "DIFY_WEB_SEARCH_API_KEY": {
+      "description": "Dify API key for the web_search tool (app-…). Leave blank to disable this tool.",
+      "required": false
+    },
+    "LOG_LEVEL": {
+      "description": "Log verbosity: DEBUG, INFO, WARNING, or ERROR.",
+      "value": "INFO"
+    }
+  },
+  "formation": {
+    "web": {
+      "quantity": 1
+    }
+  },
+  "buildpacks": [
+    { "url": "heroku/python" }
+  ]
+}

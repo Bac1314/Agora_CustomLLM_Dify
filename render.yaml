@@ -8,11 +8,16 @@ services:
       - key: OPENAI_BASE_URL
         value: https://api.openai.com/v1
       - key: OPENAI_API_KEY
-        sync: false          # set in Render dashboard
+        sync: false
       - key: OPENAI_MODEL
         value: gpt-4o-mini
-      # Dify tool keys
+      # Auth — set this as llm.api_key in Agora ConvoAI
+      - key: WRAPPER_API_KEY
+        generateValue: true
+      # Dify tool keys (add one per tool in tools.yaml)
       - key: DIFY_WEATHER_API_KEY
+        sync: false
+      - key: DIFY_WEB_SEARCH_API_KEY
         sync: false
       # App settings
       - key: LOG_LEVEL
