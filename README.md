@@ -1,5 +1,9 @@
 # Agora ConvoAI Custom LLM Wrapper — Dify Edition
 
+<p align="center">
+  <img src="assets/diagram.png" alt="Project Flow Diagram" width="100%" style="border-radius: 12px;" />
+</p>
+
 An OpenAI-compatible `/chat/completions` SSE proxy that sits between Agora ConvoAI and your upstream LLM. It registers Dify workflows as LLM-callable tools and supports two execution modes per tool:
 
 - **`async`** (default) — fires the Dify workflow in the background, speaks a synthetic acknowledgement immediately. When Dify finishes, the result is stored in the task store and injected into the next conversation turn so the LLM delivers it via Agora's built-in `_publish_message` tool.
@@ -111,7 +115,7 @@ Use the Agora ConvoAI REST API to start an agent. The key fields are explained b
 
     "llm": {
       "url": "https://your-wrapper-host/chat/completions",
-      "api_key": "<any non-empty string>",
+      "api_key": "<your WRAPPER_API_KEY value>",
       "system_messages": [
         {
           "role": "system",
@@ -228,6 +232,7 @@ Restart the server. The new tool is immediately available to the LLM.
 | `OPENAI_API_KEY` | API key for the upstream LLM |
 | `OPENAI_MODEL` | Model name (default: `gpt-4o-mini`) |
 | `OPENAI_API_VERSION` | API version query param — only needed for Azure OpenAI |
+| `WRAPPER_API_KEY` | Protects `/chat/completions` — requests must send `Authorization: Bearer <key>`. Leave blank to disable auth. |
 | `AGORA_APP_ID` | Agora App ID — optional, used for session keying if not sent per-request |
 | `AGORA_APP_CERTIFICATE` | Agora App Certificate — optional |
 | `DIFY_*_API_KEY` | Per-tool Dify API keys — names referenced via `api_key_env` in `tools.yaml` |

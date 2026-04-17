@@ -16,6 +16,9 @@ class Settings(BaseSettings):
     agora_app_id: str = ""
     agora_app_certificate: str = ""
 
+    # Auth — if set, incoming requests must include Authorization: Bearer <key>
+    wrapper_api_key: str = ""
+
     # App
     app_host: str = "0.0.0.0"
     app_port: int = 8000

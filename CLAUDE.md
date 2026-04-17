@@ -94,11 +94,17 @@ Next turn (when user speaks again):
 3. Add the Dify API key env var to `.env` (key name must match `api_key_env` in YAML).
 4. Restart the server. No code changes needed.
 
+### Authentication
+
+Set `WRAPPER_API_KEY` in `.env` to protect the `/chat/completions` endpoint. Requests must include `Authorization: Bearer <key>`. If unset, auth is disabled. The `/health` endpoint is always unauthenticated.
+
+In Agora ConvoAI, set `llm.api_key` to the same value — Agora sends it as a Bearer token on every request.
+
 ### Agora ConvoAI integration
 
 Point the agent at this wrapper by setting in the ConvoAI join config:
 ```json
-{ "llm": { "vendor": "custom", "url": "https://your-host/chat/completions", "api_key": "any-non-empty-string" } }
+{ "llm": { "vendor": "custom", "url": "https://your-host/chat/completions", "api_key": "<your WRAPPER_API_KEY value>" } }
 ```
 
 The request must contain `app_id`, `channel_name`, and `user_id` (Agora populates these from `params`) for task store and session memory to work. If those are absent, the wrapper still proxies the LLM but logs a warning.
@@ -109,5 +115,6 @@ Agora ConvoAI's predefined `_publish_message` tool must be enabled in the agent 
 
 See `.env.example` for the full list. Critical ones:
 - `OPENAI_BASE_URL` / `OPENAI_API_KEY` / `OPENAI_MODEL` — upstream LLM (any OpenAI-compatible endpoint)
+- `WRAPPER_API_KEY` — protects the `/chat/completions` endpoint (leave blank to disable auth)
 - `AGORA_APP_ID` — used for session keying (optional but recommended)
 - `DIFY_*_API_KEY` — one per tool, name referenced in `config/tools.yaml` via `api_key_env`

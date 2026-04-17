@@ -3,8 +3,9 @@ import json
 import logging
 import traceback
 from contextlib import asynccontextmanager
+from typing import Optional
 
-from fastapi import FastAPI, HTTPException, Request
+from fastapi import FastAPI, Header, HTTPException, Request
 from fastapi.responses import StreamingResponse
 
 from app import session_store as ss
@@ -50,8 +51,24 @@ async def health():
     return {"status": "ok", "tools": list(registry._tools.keys())}
 
 
+def _check_auth(authorization: Optional[str]) -> None:
+    """Validate Bearer token against WRAPPER_API_KEY. No-op if key is unset."""
+    settings = get_settings()
+    if not settings.wrapper_api_key:
+        return  # auth disabled
+    token = (authorization or "").removeprefix("Bearer ").strip()
+    if token != settings.wrapper_api_key:
+        raise HTTPException(status_code=401, detail="Invalid or missing API key.")
+
+
 @app.post("/chat/completions")
-async def create_chat_completion(request: ChatCompletionRequest, http_request: Request):
+async def create_chat_completion(
+    request: ChatCompletionRequest,
+    http_request: Request,
+    authorization: Optional[str] = Header(default=None),
+):
+    _check_auth(authorization)
+
     # DIAGNOSTIC: log the messages Agora sends
     raw_body = await http_request.body()
     raw_json = json.loads(raw_body)
